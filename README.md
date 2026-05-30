@@ -1,5 +1,7 @@
 # SoftDips Manager
 
+![Screenshot](/screenshot.png?raw=true "Screenshot of SoftDipsManager")
+
 A cross-platform tool for viewing, editing, and cloning settings
 contained in **BackBit Platinum Cartridge** .softdips files.
 
