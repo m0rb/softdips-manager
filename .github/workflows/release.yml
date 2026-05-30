@@ -1,0 +1,133 @@
+name: Release
+
+# Builds self-contained, Qt-bundled packages for each platform/arch and (on a
+# version tag) attaches them to a GitHub Release. Every package also ships the
+# license texts required when redistributing Qt under the LGPLv3 (our MIT
+# LICENSE + NOTICE, plus the GNU LGPL-3.0 and GPL-3.0 texts).
+#
+# NOTE: packaging is the part most worth a first live CI run to finalize —
+# especially the Linux AppImage step (icon/desktop + linuxdeploy-plugin-qt).
+
+on:
+  push:
+    tags: ['v*']
+  workflow_dispatch:
+
+jobs:
+  package:
+    name: ${{ matrix.name }}
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - { name: linux-x64,    os: ubuntu-22.04,     arch: x86_64 }
+          - { name: linux-arm64,  os: ubuntu-24.04-arm, arch: aarch64 }
+          - { name: macos-arm64,  os: macos-14 }
+          - { name: macos-x64,    os: macos-13 }
+          - { name: windows-x64,  os: windows-2022 }
+
+    steps:
+      - uses: actions/checkout@v4
+
+      # License texts that must accompany the Qt-bundled binaries (LGPLv3).
+      - name: Stage license files
+        shell: bash
+        run: |
+          set -eux
+          mkdir -p licenses
+          cp LICENSE NOTICE.md README.md licenses/
+          curl -fsSL https://www.gnu.org/licenses/lgpl-3.0.txt -o licenses/Qt-LGPL-3.0.txt
+          curl -fsSL https://www.gnu.org/licenses/gpl-3.0.txt  -o licenses/Qt-GPL-3.0.txt
+
+      # ── Linux: distro Qt + AppImage ──
+      - name: Build & package (Linux)
+        if: runner.os == 'Linux'
+        run: |
+          set -eux
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends \
+            qt6-base-dev qt6-base-dev-tools libgl1-mesa-dev ninja-build \
+            imagemagick file wget
+          cmake -B build -DCMAKE_BUILD_TYPE=Release
+          cmake --build build --parallel
+          ctest --test-dir build --output-on-failure
+
+          mkdir -p AppDir/usr/bin \
+                   AppDir/usr/share/applications \
+                   AppDir/usr/share/icons/hicolor/256x256/apps \
+                   AppDir/usr/share/doc/softdips
+          cp build/softdips_gui AppDir/usr/bin/
+          cp -r licenses/* AppDir/usr/share/doc/softdips/    # licenses inside the AppImage
+          convert -size 256x256 xc:'#1b2a4a' AppDir/usr/share/icons/hicolor/256x256/apps/softdips.png
+          cat > AppDir/usr/share/applications/softdips.desktop <<'EOF'
+          [Desktop Entry]
+          Type=Application
+          Name=SoftDips Manager
+          Exec=softdips_gui
+          Icon=softdips
+          Categories=Utility;
+          EOF
+
+          wget -q "https://github.com/linuxdeploy/linuxdeploy/releases/download/continuous/linuxdeploy-${{ matrix.arch }}.AppImage"
+          wget -q "https://github.com/linuxdeploy/linuxdeploy-plugin-qt/releases/download/continuous/linuxdeploy-plugin-qt-${{ matrix.arch }}.AppImage"
+          chmod +x linuxdeploy-*.AppImage
+          export QMAKE=$(command -v qmake6)
+          ./linuxdeploy-${{ matrix.arch }}.AppImage --appimage-extract-and-run \
+            --appdir AppDir --plugin qt --output appimage \
+            --desktop-file AppDir/usr/share/applications/softdips.desktop \
+            --icon-file AppDir/usr/share/icons/hicolor/256x256/apps/softdips.png
+
+          # Single archive: the AppImage + a visible licenses/ folder.
+          mkdir -p stage dist
+          mv *.AppImage "stage/SoftDipsManager-${{ matrix.name }}.AppImage"
+          cp -r licenses stage/
+          tar czf "dist/SoftDipsManager-${{ matrix.name }}.tar.gz" -C stage .
+
+      # ── macOS / Windows: aqt Qt + platform deploy tool ──
+      - name: Install Qt (macOS / Windows)
+        if: runner.os != 'Linux'
+        uses: jurplel/install-qt-action@v4
+        with:
+          version: '6.5.3'
+          cache: true
+
+      - name: Build & package (macOS)
+        if: runner.os == 'macOS'
+        run: |
+          set -eux
+          cmake -B build -DCMAKE_BUILD_TYPE=Release
+          cmake --build build --parallel
+          ctest --test-dir build --output-on-failure
+          macdeployqt build/softdips_gui.app
+          # licenses inside the bundle and alongside it
+          cp -r licenses build/softdips_gui.app/Contents/Resources/
+          mkdir -p stage && cp -R build/softdips_gui.app stage/ && cp -r licenses stage/
+          mkdir -p dist
+          ditto -c -k --keepParent stage "dist/SoftDipsManager-${{ matrix.name }}.zip"
+
+      - name: Build & package (Windows)
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          cmake -B build -DCMAKE_BUILD_TYPE=Release
+          cmake --build build --config Release --parallel
+          ctest --test-dir build --output-on-failure -C Release
+          New-Item -ItemType Directory -Force dist, pkg | Out-Null
+          Copy-Item build/Release/softdips_gui.exe pkg/
+          Copy-Item build/Release/softdips_cli.exe pkg/
+          windeployqt --release --no-translations pkg/softdips_gui.exe
+          Copy-Item -Recurse licenses pkg/licenses
+          Compress-Archive -Path pkg/* -DestinationPath "dist/SoftDipsManager-${{ matrix.name }}.zip"
+
+      - name: Upload artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: ${{ matrix.name }}
+          path: dist/*
+
+      - name: Attach to release
+        if: startsWith(github.ref, 'refs/tags/')
+        uses: softprops/action-gh-release@v2
+        with:
+          files: dist/*

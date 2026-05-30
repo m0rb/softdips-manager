@@ -1,0 +1,33 @@
+# Build output
+/build/
+build*/
+out/
+cmake-build-*/
+
+# CMake
+CMakeCache.txt
+CMakeFiles/
+*.cmake
+!CMakeLists.txt
+
+# Qt
+*.moc
+moc_*.cpp
+qrc_*.cpp
+ui_*.h
+*.qmlc
+*.user
+
+# Editors / OS
+.vscode/
+.idea/
+.DS_Store
+Thumbs.db
+*.swp
+
+# Local NeoGeo ROM/softdips test data
+*.softdips
+*.p1
+*.pd
+*.bin
+*.rom
