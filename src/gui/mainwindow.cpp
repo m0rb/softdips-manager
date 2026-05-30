@@ -277,7 +277,9 @@ void MainWindow::about() {
     QMessageBox::about(this, "About " + name,
         "<center>" + name + " v" + ver + "<br>"
         "For the BackBit NeoGeo MVS Platinum Cartridge<br><br>"
-        "by morb -- <a href=\"https://meson.ninja/\">https://meson.ninja/</a></center>");
+        "by morb -- <a href=\"https://meson.ninja/\">
+        https://meson.ninja/</a><br><a href=\"https://github.com/m0rb/softdips-manager\">
+        https://github.com/m0rb/softdips-manager</a></center>");
 }
 
 void MainWindow::logMessage(const QString& msg) {

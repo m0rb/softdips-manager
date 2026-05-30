@@ -30,14 +30,14 @@ jobs:
       - uses: actions/checkout@v4
 
       # License texts that must accompany the Qt-bundled binaries (LGPLv3).
+      # The GNU texts are vendored in third_party/ (no network dependency).
       - name: Stage license files
         shell: bash
         run: |
           set -eux
           mkdir -p licenses
-          cp LICENSE NOTICE.md README.md licenses/
-          curl -fsSL https://www.gnu.org/licenses/lgpl-3.0.txt -o licenses/Qt-LGPL-3.0.txt
-          curl -fsSL https://www.gnu.org/licenses/gpl-3.0.txt  -o licenses/Qt-GPL-3.0.txt
+          cp LICENSE NOTICE.md README.md \
+             third_party/Qt-LGPL-3.0.txt third_party/Qt-GPL-3.0.txt licenses/
 
       # ── Linux: distro Qt + AppImage ──
       - name: Build & package (Linux)
@@ -77,9 +77,11 @@ jobs:
             --desktop-file AppDir/usr/share/applications/softdips.desktop \
             --icon-file AppDir/usr/share/icons/hicolor/256x256/apps/softdips.png
 
-          # Single archive: the AppImage + a visible licenses/ folder.
+          # Single archive: the built AppImage + a visible licenses/ folder.
+          # (Exclude the linuxdeploy tool AppImages from the glob.)
+          built=$(ls *.AppImage | grep -v -- linuxdeploy | head -1)
           mkdir -p stage dist
-          mv *.AppImage "stage/SoftDipsManager-${{ matrix.name }}.AppImage"
+          mv "$built" "stage/SoftDipsManager-${{ matrix.name }}.AppImage"
           cp -r licenses stage/
           tar czf "dist/SoftDipsManager-${{ matrix.name }}.tar.gz" -C stage .
 
