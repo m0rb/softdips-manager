@@ -148,10 +148,12 @@ int main(int argc, char* argv[]) {
     std::string arg1;
     std::string arg2;
     
-    // Parse arguments
-    for (int i = 1; i < argc; i++) {
-        std::string arg = argv[i];
-        
+    // Parse arguments. Uses an explicit index since some options consume the
+    // following token(s) as their values.
+    int i = 1;
+    while (i < argc) {
+        std::string arg = argv[i++];
+
         if (arg == "-h" || arg == "--help") {
             printUsage(argv[0]);
             return 0;
@@ -159,16 +161,16 @@ int main(int argc, char* argv[]) {
             command = "list";
         } else if (arg == "-g" || arg == "--get") {
             command = "get";
-            if (i + 1 < argc) {
-                arg1 = argv[++i];
+            if (i < argc) {
+                arg1 = argv[i++];
             }
         } else if (arg == "-s" || arg == "--set") {
             command = "set";
-            if (i + 1 < argc) {
-                arg1 = argv[++i];
+            if (i < argc) {
+                arg1 = argv[i++];
             }
-            if (i + 1 < argc) {
-                arg2 = argv[++i];
+            if (i < argc) {
+                arg2 = argv[i++];
             }
         } else if (arg == "-d" || arg == "--dump") {
             command = "dump";

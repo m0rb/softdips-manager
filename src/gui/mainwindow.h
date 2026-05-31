@@ -87,6 +87,10 @@ public:
     explicit MainWindow(QWidget* parent = nullptr);
     ~MainWindow() override = default;
 
+    // Open a path given on the command line: a directory is loaded as a game
+    // collection, anything else as a single .softdips file.
+    void openPath(const std::string& path);
+
 private slots:
     void openFile();
     void openDirectory();

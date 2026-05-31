@@ -517,7 +517,7 @@ static std::optional<SoftDipsFile> tryExtractTableAt(const std::vector<uint8_t>&
     size_t end = start + 32;
     while (end < rom.size()) {
         uint8_t c = rom[end];
-        if (c == 0x00 || (c >= 1 && c <= 7)) break;
+        if (c <= 7) break;  // 0x00-0x07 control bytes terminate the text section
         if (c >= 32 && c < 127) { end++; continue; }
         if (c == 0x13) { end++; continue; }
         if (c == 0xFF && (end - start) < 100) { end++; continue; }
@@ -631,7 +631,7 @@ std::optional<SoftDipsFile> SoftDipsParser::extractFromRom(
             uint8_t c = romData[end];
 
             // Control characters (0x00-0x07) = end of text section
-            if (c == 0x00 || (c >= 1 && c <= 7)) break;
+            if (c <= 7) break;
 
             // Valid text characters
             if (c >= 32 && c < 127) { end++; continue; }

@@ -12,6 +12,7 @@ static QString cleanLabel(const QString& raw) {
     return s.simplified();
 }
 #include <QDir>
+#include <filesystem>
 #include <QFileInfoList>
 #include <QDateTime>
 #include <QTimer>
@@ -288,6 +289,14 @@ void MainWindow::logMessage(const QString& msg) {
 
 // ── Directory loading ──
 
+void MainWindow::openPath(const std::string& path) {
+    std::error_code ec;
+    if (std::filesystem::is_directory(path, ec))
+        loadDirectory(path);
+    else
+        loadFile(path);
+}
+
 void MainWindow::loadFile(const std::string& filePath) {
     auto file = softdips::SoftDipsParser::parse(filePath);
     if (!file) { logMessage("ERROR: " + QString::fromStdString(filePath)); return; }
@@ -464,15 +473,15 @@ void MainWindow::updateTable() {
     if (!m_softDipsFile) return;
 
     auto allSwitches = m_softDipsFile->getAllSwitches();
-    for (size_t i = 0; i < allSwitches.size(); i++) {
-        auto* sw = allSwitches[i];
+    for (size_t i = 0; i < allSwitches.size(); ) {
+        auto* sw = allSwitches[i++];
 
         // A Time setting's two halves (MIN + SEC) render as one row with two
         // dropdowns side by side.
         if (sw->kind == softdips::DipSwitch::Kind::Time && sw->timeField == 0) {
             softdips::DipSwitch* secSw = nullptr;
-            if (i + 1 < allSwitches.size()) {
-                auto* n = allSwitches[i + 1];
+            if (i < allSwitches.size()) {
+                auto* n = allSwitches[i];
                 if (n->kind == softdips::DipSwitch::Kind::Time && n->timeField == 1 &&
                     n->metaByteIndex == sw->metaByteIndex)
                     secSw = n;
@@ -825,11 +834,12 @@ void MainWindow::createFromRom() {
                 g.filePath = outPath;
                 g.softDips = std::move(extracted);
 
-                QListWidgetItem* item = m_gameList->item(m_currentGameIndex);
-                item->setText("✓ " + QString::fromStdString(g.dirName));
-                // Leave the clone-selection checkbox unchecked; creating a
-                // .softdips shouldn't opt the title into clone apply.
-                item->setCheckState(Qt::Unchecked);
+                if (auto* item = m_gameList->item(m_currentGameIndex)) {
+                    item->setText("✓ " + QString::fromStdString(g.dirName));
+                    // Leave the clone-selection checkbox unchecked; creating a
+                    // .softdips shouldn't opt the title into clone apply.
+                    item->setCheckState(Qt::Unchecked);
+                }
 
                 selectGame(m_currentGameIndex);
                 return;

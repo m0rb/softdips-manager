@@ -10,9 +10,9 @@ int main(int argc, char* argv[]) {
     MainWindow window;
     window.show();
 
-    // If a file was passed as argument, open it
+    // If a path was passed as argument, open it (file or directory).
     if (argc > 1) {
-        // TODO: Open file from command line argument
+        window.openPath(argv[1]);
     }
 
     return app.exec();
