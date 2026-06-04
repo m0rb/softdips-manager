@@ -138,17 +138,30 @@ public:
     
     // Find candidate program ROMs (the first program ROM holds the softdips
     // header) in a game directory, in priority order. Recognises BackBit
-    // naming (prom.p1, *.pd) and MAME naming (NGH-p1.bin, name-p1.bin,
+    // naming (prom.p1, *.pd, *.ep1) and MAME naming (NGH-p1.bin, name-p1.bin,
     // including revision suffixes like -p1a.bin, and -pg1.bin variants).
     static std::vector<std::filesystem::path> findProgramRoms(
         const std::filesystem::path& dir);
 
+    // Rank program-ROM candidates among a set of filenames (names only, with
+    // extensions — no directory traversal), in the same priority order as
+    // findProgramRoms. Lets frontends without filesystem access (the web build)
+    // enumerate a directory themselves and pick which files to read. Returns the
+    // matching filenames, best candidate first.
+    static std::vector<std::string> rankProgramRoms(
+        const std::vector<std::string>& filenames);
+
     // Extract softdips from a P-ROM file
     static std::optional<SoftDipsFile> extractFromRom(const std::filesystem::path& romPath);
-    
+
     // Extract with diagnostics output (optional)
     static std::optional<SoftDipsFile> extractFromRom(
         const std::filesystem::path& romPath, std::string* diagnostics);
+
+    // Extract the softdips table directly from raw program-ROM bytes (the
+    // byte-based core of the path overloads above).
+    static std::optional<SoftDipsFile> extractFromRom(
+        const std::vector<uint8_t>& romBytes, std::string* diagnostics = nullptr);
 
     // Extract the softdips table from the first usable program ROM in a dir.
     static std::optional<SoftDipsFile> extractFromDir(

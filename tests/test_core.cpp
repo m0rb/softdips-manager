@@ -239,6 +239,61 @@ static void test_match_crossgame() {
     CHECK(m3.kind == CloneMatch::Kind::NotFound);
 }
 
+// Helper: is `name` present in a result list?
+static bool contains(const std::vector<std::string>& v, const std::string& s) {
+    for (const auto& x : v) if (x == s) return true;
+    return false;
+}
+
+static void test_rank_program_roms() {
+    // BackBit extensions (.p1/.pd/.ep1) and MAME -p1.bin are recognised; other
+    // ROMs and data files are excluded.
+    auto r = SoftDipsParser::rankProgramRoms(
+        {"readme.txt", "068-c1.bin", "prom.p1", "068-p1.bin", "cart.pd", "pbobblen.ep1"});
+    CHECK(contains(r, "prom.p1"));
+    CHECK(contains(r, "cart.pd"));
+    CHECK(contains(r, "068-p1.bin"));
+    CHECK(contains(r, "pbobblen.ep1"));   // .ep1 first program ROM (pbobblen)
+    CHECK(!contains(r, "readme.txt"));
+    CHECK(!contains(r, "068-c1.bin"));    // character ROM, not program
+
+    // A lone .ep1 is still found.
+    auto only = SoftDipsParser::rankProgramRoms({"pbobblen.ep1"});
+    CHECK_EQ(only.size(), size_t(1));
+    if (!only.empty()) CHECK_EQ(only[0], std::string("pbobblen.ep1"));
+
+    // BackBit naming ranks ahead of MAME naming for the same bank.
+    auto order = SoftDipsParser::rankProgramRoms({"068-p1.bin", "prom.p1"});
+    CHECK_EQ(order.size(), size_t(2));
+    if (order.size() == 2) CHECK_EQ(order[0], std::string("prom.p1"));
+
+    // MAME program ROMs with region/revision suffixes (p1sp, p1pa, p1pl, p1up,
+    // p1sa, p1p, p1bl, p1c, p1k) and other first-bank tokens (pg1, ph1, hp1).
+    for (const char* fn : {"abc-p1sp.bin", "abc-p1pa.bin", "abc-p1pl.bin",
+                           "abc-p1up.bin", "abc-p1sa.bin", "abc-p1p.bin",
+                           "abc-pg1.p1", "abc-ph1.p1", "abc-hp1.p1"}) {
+        auto r = SoftDipsParser::rankProgramRoms({fn});
+        CHECK_EQ(r.size(), size_t(1));
+        if (!r.empty()) CHECK_EQ(r[0], std::string(fn));
+    }
+
+    // Character/sound/voice ROMs are not program ROMs.
+    auto none = SoftDipsParser::rankProgramRoms(
+        {"068-c1.bin", "068-c2.bin", "068-m1.m1", "068-v1.v1", "068-s1.s1"});
+    CHECK_EQ(none.size(), size_t(0));
+
+    // The first program ROM (bank 1) is tried before later banks (p2), whatever
+    // the naming — the softdips header lives in the first PROM.
+    auto banks = SoftDipsParser::rankProgramRoms({"007-p2.p2", "007-p1.p1"});
+    CHECK_EQ(banks.size(), size_t(2));
+    if (banks.size() == 2) CHECK_EQ(banks[0], std::string("007-p1.p1"));
+
+    // A few sets load p2 first; a lone p2 is still offered as a candidate.
+    auto p2first = SoftDipsParser::rankProgramRoms({"xyz-p2.bin"});
+    CHECK_EQ(p2first.size(), size_t(1));
+    if (!p2first.empty()) CHECK_EQ(p2first[0], std::string("xyz-p2.bin"));
+}
+
 int main() {
     test_parse_simple();
     test_roundtrip();
@@ -249,6 +304,7 @@ int main() {
     test_decompose_repack();
     test_normalize();
     test_match_crossgame();
+    test_rank_program_roms();
 
     std::cout << (g_checks - g_failures) << "/" << g_checks << " checks passed\n";
     if (g_failures) {

@@ -45,3 +45,26 @@ jobs:
 
       - name: Test
         run: ctest --test-dir build --output-on-failure -C Release
+
+  # Validate the Emscripten web build (no deploy — Pages deploy lives in pages.yml).
+  web-build:
+    name: Web (Emscripten)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Build web app (Emscripten)
+        run: |
+          git clone --depth 1 https://github.com/emscripten-core/emsdk.git "$RUNNER_TEMP/emsdk"
+          cd "$RUNNER_TEMP/emsdk"
+          ./emsdk install 5.0.7
+          ./emsdk activate 5.0.7
+          source ./emsdk_env.sh
+          cd "$GITHUB_WORKSPACE"
+          emcmake cmake -B build-web -DCMAKE_BUILD_TYPE=Release
+          cmake --build build-web
+
+      - name: Verify build output
+        run: |
+          test -f web/softdips.js
+          test -f web/softdips.wasm

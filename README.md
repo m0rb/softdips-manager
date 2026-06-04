@@ -12,13 +12,40 @@ differently.
 
 ## Features
 
-- Reads soft DIP tables straight from the P-ROM (`.p1`, `.pd`, `*-p1.bin`,
-  etc.) — no guesswork.
+- Reads soft DIP tables straight from the P-ROM (`.p1`, `.pd`, `.ep1`,
+  `*-p1.bin`, etc.) — no guesswork.
 - Full support for list, packed (`CREDIT/LEVEL`), count (lives/continues,
   `WITHOUT`/`1-99`/`INFINITE`), and time (`MM:SS`) settings.
 - **Clone** settings across titles with semantic matching, confirm/skip prompts.
 - **Audit** existing `.softdips` against their P-ROM and regenerate stale ones.
 - **Reset to Defaults** from the P-ROM.
+
+## Web app
+
+A browser version runs the same core compiled to WebAssembly — **everything is
+client-side; no files are uploaded.** Hosted at:
+
+**https://m0rb.github.io/softdips-manager/**
+
+On a Chrome-based browser (Chrome / Edge / Brave) it uses the File System
+Access API to edit `.softdips` **in place** — point it at your SD card or
+cartridge `NeoGeo` folder and it provides full-collection management (edit, 
+clone, generate, audit). Firefox, its derivatives, and other browsers 
+without FS Access API can open a single file and download edited copies, 
+but not write in place or browse folders.
+
+### Building the web app
+
+Requires the [Emscripten SDK](https://emscripten.org/) (`emcmake` on `PATH`):
+
+```sh
+emcmake cmake -B build-web -DCMAKE_BUILD_TYPE=Release
+cmake --build build-web        # emits web/softdips.js + web/softdips.wasm
+python3 -m http.server -d web  # then open http://localhost:8000
+```
+
+GitHub Pages is built and deployed automatically from `main` by
+[`.github/workflows/pages.yml`](.github/workflows/pages.yml).
 
 ## Building
 

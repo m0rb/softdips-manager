@@ -1,0 +1,78 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>SoftDips Manager</title>
+  <link rel="icon" href="data:," />
+  <link rel="stylesheet" href="style.css" />
+</head>
+<body>
+  <div id="menubar">
+    <span class="brand">SoftDips Manager</span>
+    <button id="openFile">Open File…</button>
+    <button id="openFolder">Open Folder…</button>
+    <span class="sep"></span>
+    <div class="menu">
+      <button id="toolsBtn" class="menu-btn">Tools ▾</button>
+      <div class="menu-list" id="toolsMenu" hidden>
+        <button id="cloneBtn">Clone Settings to Selected Titles…</button>
+        <div class="menu-divider"></div>
+        <button id="genAllBtn">Generate .softdips for All Titles…</button>
+        <button id="genSelBtn">Generate .softdips for Selected Titles…</button>
+        <div class="menu-divider"></div>
+        <button id="auditBtn">Audit Titles vs P-ROM…</button>
+      </div>
+    </div>
+    <span class="spacer"></span>
+    <button id="settingsBtn">Settings…</button>
+    <button id="aboutBtn">About</button>
+  </div>
+
+  <div id="split">
+    <!-- Left: title list -->
+    <aside id="left">
+      <div class="left-head">Titles</div>
+      <label class="checkrow" id="selectAllRow" hidden>
+        <input type="checkbox" id="selectAll" /> Select all
+      </label>
+      <ul id="gameList"></ul>
+      <button id="createFromRom" disabled>Create .softdips from P-ROM</button>
+    </aside>
+
+    <!-- Right: editor + log -->
+    <section id="right">
+      <div id="gameLabel">Open a file or folder to begin</div>
+      <div id="editorWrap">
+        <table id="switchTable" hidden>
+          <thead><tr><th>Dip Switch</th><th>Value</th></tr></thead>
+          <tbody id="switchBody"></tbody>
+        </table>
+        <p id="editorEmpty" class="muted">No title loaded.</p>
+      </div>
+      <div id="editorActions">
+        <button id="save" disabled>Save</button>
+        <button id="reset" disabled>Reset to Defaults</button>
+      </div>
+      <p class="hint">Tip: check titles on the left, then Tools → Clone Settings to copy this title's settings onto them.</p>
+      <div class="log-head">Log</div>
+      <pre id="log" placeholder="Operation log…"></pre>
+    </section>
+  </div>
+
+  <div id="statusbar">
+    <span id="status">Loading engine…</span>
+    <span class="spacer"></span>
+    <span id="engineState">wasm: loading</span>
+  </div>
+
+  <!-- modal host -->
+  <div id="modalRoot" hidden></div>
+
+  <!-- fallback file input (browsers without the File System Access API) -->
+  <input type="file" id="fallbackInput" accept=".softdips" hidden />
+
+  <script src="softdips.js"></script>
+  <script src="app.js"></script>
+</body>
+</html>

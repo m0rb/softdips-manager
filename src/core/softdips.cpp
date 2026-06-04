@@ -6,6 +6,7 @@
 #include <map>
 #include <sstream>
 #include <cstdio>
+#include <regex>
 
 namespace softdips {
 
@@ -424,67 +425,92 @@ static std::string toLower(std::string s) {
 }
 
 // Does `stem` (filename without its final extension) end with a program-ROM
-// token like "p1", "p1a", "pg1", "pg1b"? Requires a separator (or start) before
-// the token so we don't match unrelated names ending in "...p1".
-static bool endsWithProgramToken(std::string s) {
-    // Strip an optional single revision letter that follows the "1"
-    // (e.g. "220-p1a" -> "220-p1").
-    if (s.size() >= 2 && s.back() >= 'a' && s.back() <= 'z' && s[s.size() - 2] == '1')
-        s.pop_back();
+// token? MAME program ROMs name the maincpu chip many ways — p1, p1a, p1sp,
+// p1pa, p1pl, p1up, pg1, ph1, pn1, pk1, hp1, ep1, and the rare p2/p2a (a few
+// sets load p2 first). The token must start the stem or follow a separator so
+// we don't match unrelated names that merely end in "...p1".
+static bool endsWithProgramToken(const std::string& stem) {
+    // (sep|start)(letter group)(bank digit)(optional revision/region suffix)
+    static const std::regex re(
+        R"((^|[-_. ])(ep|hp|ph|pg|pn|pk|sp|p)[0-9][0-9a-z]*$)",
+        std::regex::icase);
+    return std::regex_search(stem, re);
+}
 
-    auto endsWith = [&](const std::string& tok) {
-        return s.size() >= tok.size() && s.compare(s.size() - tok.size(), tok.size(), tok) == 0;
-    };
-    size_t tokLen = 0;
-    if (endsWith("pg1")) tokLen = 3;
-    else if (endsWith("p1")) tokLen = 2;
-    else return false;
+// Of the program-ROM stems above, is this the *first* program ROM (bank 1, which
+// holds the softdips header) rather than a later bank (p2, p3, ...)? Used only to
+// try the first PROM before falling back to later ones.
+static bool isFirstBankToken(const std::string& stem) {
+    // p1-class: the bank digit is 1 (p1, pg1, ph1, hp1, ep1, p1sp, ...).
+    static const std::regex bank1(
+        R"((^|[-_. ])(ep|hp|ph|pg|pn|pk|p)1[0-9a-z]*$)", std::regex::icase);
+    // BackBit/chip names without a bank digit are first by convention (pg, prom).
+    static const std::regex noDigit(
+        R"((^|[-_. ])(pg|ph|pn|pk))", std::regex::icase);
+    return std::regex_search(stem, bank1) || std::regex_search(stem, noDigit);
+}
 
-    size_t before = s.size() - tokLen;
-    if (before == 0) return true;  // whole stem is the token
-    char c = s[before - 1];
-    return c == '-' || c == '_' || c == ' ' || c == '.';
+std::vector<std::string> SoftDipsParser::rankProgramRoms(
+    const std::vector<std::string>& filenames) {
+    namespace fs = std::filesystem;
+    // Each candidate gets a sort key {bank, naming, variant, name}, lower tried
+    // first. The softdips header lives in the *first* program ROM (the one that
+    // loads at offset 0 in MAME's cslot1:maincpu), so bank is the primary key:
+    //   bank   : 0 = first program ROM (p1-class), 1 = a later bank (p2-class).
+    //   naming : 0 = BackBit/chip extension (.p1/.pd/.ep1/.p2/.sp2), 1 = MAME .bin/.rom.
+    //   variant: 0 = canonical ("prom", "<id>-p1"), 1 = revision/hack form.
+    struct Cand { int bank; int naming; int variant; std::string name; std::string file; };
+    std::vector<Cand> cands;
+
+    for (const auto& fn : filenames) {
+        // path is used only to split name/extension here — no filesystem access.
+        fs::path p(fn);
+        std::string ext = toLower(p.extension().string());
+        std::string stem = toLower(p.stem().string());
+
+        int naming, bank;
+        if (ext == ".p1" || ext == ".pd" || ext == ".ep1") {
+            naming = 0; bank = 0;                 // first PROM by chip extension
+        } else if (ext == ".p2" || ext == ".sp2" || ext == ".ep2") {
+            naming = 0; bank = 1;                 // later PROM (a few sets load it first)
+        } else if ((ext == ".bin" || ext == ".rom") && endsWithProgramToken(stem)) {
+            naming = 1; bank = isFirstBankToken(stem) ? 0 : 1;   // MAME naming
+        } else {
+            continue;                             // not a program ROM
+        }
+        int variant = (stem == "prom" || isFirstBankToken(stem)) ? 0 : 1;
+        cands.push_back({bank, naming, variant, stem, fn});
+    }
+
+    std::sort(cands.begin(), cands.end(), [](const Cand& a, const Cand& b) {
+        if (a.bank    != b.bank)    return a.bank    < b.bank;
+        if (a.naming  != b.naming)  return a.naming  < b.naming;
+        if (a.variant != b.variant) return a.variant < b.variant;
+        return a.name < b.name;
+    });
+
+    std::vector<std::string> result;
+    for (const auto& c : cands) result.push_back(c.file);
+    return result;
 }
 
 std::vector<std::filesystem::path> SoftDipsParser::findProgramRoms(
     const std::filesystem::path& dir) {
     namespace fs = std::filesystem;
-    // Each candidate gets a sort key {bucket, variantRank, name}. Lower is tried
-    // first: BackBit naming before MAME; and within that, the canonical program
-    // ROM ("prom", "<id>-p1") before variant/hack forms ("016-hp1", revisions).
-    struct Cand { int bucket; int variant; std::string name; fs::path path; };
-    std::vector<Cand> cands;
-
     std::error_code ec;
     if (!fs::is_directory(dir, ec)) return {};
+
+    std::vector<std::string> names;
+    std::map<std::string, fs::path> byName;
     for (const auto& entry : fs::directory_iterator(dir, ec)) {
         if (!entry.is_regular_file(ec)) continue;
-        const fs::path& p = entry.path();
-        std::string ext = toLower(p.extension().string());
-        std::string stem = toLower(p.stem().string());
-
-        int bucket;
-        if (ext == ".p1" || ext == ".pd") {
-            bucket = 0;  // BackBit (.pd is decrypted)
-        } else if ((ext == ".bin" || ext == ".rom") && endsWithProgramToken(stem)) {
-            bucket = 1;  // MAME
-        } else {
-            continue;
-        }
-        // "prom"/"<id>-p1" are clean main programs; "016-hp1" (letter before the
-        // token, no separator) is a hack/variant and should rank after.
-        int variant = (stem == "prom" || endsWithProgramToken(stem)) ? 0 : 1;
-        cands.push_back({bucket, variant, stem, p});
+        std::string fn = entry.path().filename().string();
+        names.push_back(fn);
+        byName[fn] = entry.path();
     }
 
-    std::sort(cands.begin(), cands.end(), [](const Cand& a, const Cand& b) {
-        if (a.bucket != b.bucket) return a.bucket < b.bucket;
-        if (a.variant != b.variant) return a.variant < b.variant;
-        return a.name < b.name;
-    });
-
     std::vector<fs::path> result;
-    for (const auto& c : cands) result.push_back(c.path);
+    for (const auto& n : rankProgramRoms(names)) result.push_back(byName[n]);
     return result;
 }
 
@@ -558,8 +584,13 @@ std::optional<SoftDipsFile> SoftDipsParser::extractFromRom(
         if (diagnostics) *diagnostics = "Could not read ROM file";
         return std::nullopt;
     }
+    return extractFromRom(romData, diagnostics);
+}
 
-    // Byte-swap the ROM to get big-endian data
+std::optional<SoftDipsFile> SoftDipsParser::extractFromRom(
+    const std::vector<uint8_t>& romBytes, std::string* diagnostics) {
+    // Byte-swap a working copy of the ROM to get big-endian data.
+    std::vector<uint8_t> romData = romBytes;
     byteSwap16(romData.data(), romData.size());
 
     // Search for softdips: header marker is 6 bytes, first 4 must be 0xFF

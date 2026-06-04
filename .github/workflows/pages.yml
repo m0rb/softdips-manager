@@ -1,0 +1,68 @@
+name: Deploy web app to GitHub Pages
+
+# Builds the Emscripten web frontend (src/web + src/core → web/softdips.js/.wasm)
+# and publishes the web/ directory to GitHub Pages. The generated wasm/js are not
+# committed (they're .gitignored); they are produced fresh here on every deploy.
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - "src/core/**"
+      - "src/web/**"
+      - "web/**"
+      - "CMakeLists.txt"
+      - ".github/workflows/pages.yml"
+  workflow_dispatch:
+
+# Permissions required by the official Pages deployment actions.
+permissions:
+  contents: read
+  pages: write
+  id-token: write
+
+# Allow one Pages deploy at a time; cancel older in-progress runs.
+concurrency:
+  group: pages
+  cancel-in-progress: true
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      # Self-contained emsdk install pinned to match local dev (bump to track
+      # your local toolchain). Builds straight into web/ via RUNTIME_OUTPUT_DIRECTORY.
+      - name: Build web app (Emscripten)
+        run: |
+          git clone --depth 1 https://github.com/emscripten-core/emsdk.git "$RUNNER_TEMP/emsdk"
+          cd "$RUNNER_TEMP/emsdk"
+          ./emsdk install 5.0.7
+          ./emsdk activate 5.0.7
+          source ./emsdk_env.sh
+          cd "$GITHUB_WORKSPACE"
+          emcmake cmake -B build-web -DCMAKE_BUILD_TYPE=Release
+          cmake --build build-web
+
+      - name: Verify build output
+        run: |
+          test -f web/index.html
+          test -f web/softdips.js
+          test -f web/softdips.wasm
+
+      - uses: actions/configure-pages@v5
+
+      - uses: actions/upload-pages-artifact@v3
+        with:
+          path: web
+
+  deploy:
+    needs: build
+    runs-on: ubuntu-latest
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    steps:
+      - id: deployment
+        uses: actions/deploy-pages@v4
