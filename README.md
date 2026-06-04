@@ -22,6 +22,9 @@ differently.
 
 ## Web app
 
+![Screenshot](/webapp.png?raw=true "Screenshot of SoftDipsManager Webapp")
+
+
 A browser version runs the same core compiled to WebAssembly — **everything is
 client-side; no files are uploaded.** Hosted at:
 
