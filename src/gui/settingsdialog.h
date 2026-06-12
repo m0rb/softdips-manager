@@ -20,6 +20,11 @@ namespace appsettings {
     void        addRecentDir(const QString& dir);     // dedupes, most-recent first
     void        removeRecentDir(const QString& dir);
     void        setRecentDirs(const QStringList& dirs);
+
+    QString     backupDir();                          // defaults under AppData
+    void        setBackupDir(const QString& dir);
+    bool        autoBackup();                          // back up before bulk changes
+    void        setAutoBackup(bool on);
 }
 
 // Child window for application settings: general preferences plus management
@@ -41,6 +46,7 @@ private slots:
     void onRemove();
     void onOpenSelected();
     void onReopenToggled(bool on);
+    void onBrowseBackup();
 
 private:
     QString selectedDir() const;
@@ -50,4 +56,6 @@ private:
     QPushButton* m_addBtn;
     QPushButton* m_removeBtn;
     QPushButton* m_openBtn;
+    QCheckBox*   m_autoBackupChk;
+    class QLineEdit* m_backupDirEdit;
 };

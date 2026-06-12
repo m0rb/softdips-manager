@@ -66,6 +66,14 @@ This software is released under the **MIT License** — see [`LICENSE`](LICENSE)
 It links the Qt framework under the **LGPLv3**; see [`NOTICE.md`](NOTICE.md) for
 third-party license details.
 
+## Credits
+
+Thank you so much to evie at BackBit for an amazing product, being there for 
+everyone, and all the hard work!
+
+Thanks to HornHeaDD, NeoGeo81, and lithy on The BackBit Forum™ for all the 
+inspiration that lead to this program.
+
 ## Disclaimer
 
 **THIS SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
