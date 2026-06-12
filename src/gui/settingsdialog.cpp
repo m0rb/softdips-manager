@@ -10,12 +10,16 @@
 #include <QLabel>
 #include <QFileDialog>
 #include <QDir>
+#include <QLineEdit>
+#include <QStandardPaths>
 
 namespace {
 constexpr int kMaxRecentDirs = 20;
-const char* kReopenKey  = "options/reopenLastDir";
-const char* kLastDirKey = "options/lastDir";
-const char* kRecentKey  = "recent/dirs";
+const char* kReopenKey     = "options/reopenLastDir";
+const char* kLastDirKey    = "options/lastDir";
+const char* kRecentKey     = "recent/dirs";
+const char* kBackupDirKey  = "options/backupDir";
+const char* kAutoBackupKey = "options/autoBackup";
 }
 
 // ── appsettings ──────────────────────────────────────────────────────────
@@ -62,6 +66,15 @@ void removeRecentDir(const QString& dir) {
     setRecentDirs(dirs);
 }
 
+QString backupDir() {
+    QString def = QStandardPaths::writableLocation(QStandardPaths::AppDataLocation) + "/backups";
+    return QSettings().value(kBackupDirKey, def).toString();
+}
+void setBackupDir(const QString& dir) { QSettings().setValue(kBackupDirKey, dir); }
+
+bool autoBackup() { return QSettings().value(kAutoBackupKey, false).toBool(); }
+void setAutoBackup(bool on) { QSettings().setValue(kAutoBackupKey, on); }
+
 } // namespace appsettings
 
 // ── SettingsDialog ─────────────────────────────────────────────────────────
@@ -78,6 +91,22 @@ SettingsDialog::SettingsDialog(QWidget* parent) : QDialog(parent) {
     m_reopenChk = new QCheckBox("Reopen last working directory on startup");
     connect(m_reopenChk, &QCheckBox::toggled, this, &SettingsDialog::onReopenToggled);
     generalLayout->addWidget(m_reopenChk);
+
+    m_autoBackupChk = new QCheckBox("Back up settings before bulk changes (clone / import / regenerate)");
+    connect(m_autoBackupChk, &QCheckBox::toggled, this,
+            [](bool on) { appsettings::setAutoBackup(on); });
+    generalLayout->addWidget(m_autoBackupChk);
+
+    auto* backupRow = new QHBoxLayout();
+    backupRow->addWidget(new QLabel("Backup folder:"));
+    m_backupDirEdit = new QLineEdit();
+    connect(m_backupDirEdit, &QLineEdit::editingFinished, this,
+            [this]() { appsettings::setBackupDir(m_backupDirEdit->text()); });
+    backupRow->addWidget(m_backupDirEdit, 1);
+    auto* browseBtn = new QPushButton("Browse…");
+    connect(browseBtn, &QPushButton::clicked, this, &SettingsDialog::onBrowseBackup);
+    backupRow->addWidget(browseBtn);
+    generalLayout->addLayout(backupRow);
     layout->addWidget(generalGroup);
 
     // Cached working directories.
@@ -121,6 +150,9 @@ SettingsDialog::SettingsDialog(QWidget* parent) : QDialog(parent) {
 void SettingsDialog::reload() {
     QSignalBlocker block(m_reopenChk);  // don't re-persist while loading
     m_reopenChk->setChecked(appsettings::reopenLastDir());
+    QSignalBlocker block2(m_autoBackupChk);
+    m_autoBackupChk->setChecked(appsettings::autoBackup());
+    m_backupDirEdit->setText(appsettings::backupDir());
 
     QString previouslySelected = selectedDir();
     m_dirList->clear();
@@ -138,6 +170,14 @@ QString SettingsDialog::selectedDir() const {
 
 void SettingsDialog::onReopenToggled(bool on) {
     appsettings::setReopenLastDir(on);
+}
+
+void SettingsDialog::onBrowseBackup() {
+    QString dir = QFileDialog::getExistingDirectory(this, "Choose Backup Folder",
+                                                    appsettings::backupDir());
+    if (dir.isEmpty()) return;
+    m_backupDirEdit->setText(dir);
+    appsettings::setBackupDir(dir);
 }
 
 void SettingsDialog::onAdd() {

@@ -18,6 +18,7 @@
 #include <QSplitter>
 #include <QStatusBar>
 #include <QListWidget>
+#include <QLineEdit>
 #include <QTextEdit>
 #include <QCheckBox>
 #include <QGridLayout>
@@ -104,6 +105,16 @@ private slots:
     void auditTitles();
     void generateAllSoftdips();
     void generateSelectedSoftdips();
+    void exportSettings();
+    void importSettings();
+    void setSettingAcrossTitles();
+    void bulkExportSettings();
+    void bulkImportSettings();
+    void shareSettings();
+    void backupAllSettings();
+    void restoreFromBackup();
+    void undo();
+    void redo();
 
 private:
     void setupUI();
@@ -128,12 +139,41 @@ private:
     // Generate .softdips (from each P-ROM) for the given titles that lack one.
     void generateSoftdipsFor(const std::vector<int>& indices, const QString& noun);
 
+    // file's selections as a name/value list (profile / clone source).
+    std::vector<CloneItem> settingsOf(const softdips::SoftDipsFile& file) const;
+    // file's settings as a profile JSON string (shared schema with the web app).
+    QString profileJson(const softdips::SoftDipsFile& file, bool compact = false) const;
+    // Apply a name/value list to one file; returns count applied.
+    int applyProfileToFile(const std::vector<CloneItem>& items,
+                           softdips::SoftDipsFile& file, const QString& label);
+    // Apply imported settings to the title they're for (detected by name).
+    void applyImportedProfile(const std::vector<CloneItem>& items, const QString& wantName);
+    // Hide table rows at their ROM default when "Changed only" is checked.
+    void filterChangedRows();
+    // Copy every title's on-disk .softdips under destRoot/<dir>/; returns count.
+    int backupToDir(const QString& destRoot);
+    // Back up before a destructive bulk op, if the setting is enabled.
+    void autoBackupIfEnabled(const QString& reason);
+
+    // Undo/redo of editor edits via full selection-state snapshots.
+    QVector<int> selectionState() const;          // each switch's currentIndex
+    void applyState(const QVector<int>& s);
+    void recordEdit();                            // call after a committed dip edit
+    void markCurrentDirty(bool dirty);            // "●" on the current title
+    void filterTitles(const QString& query);
+
+    struct Choice { bool skip = true; std::string switchName; int optionIndex = -1; bool repeat = false; };
+    // User's resolution of an ambiguous match (shared by Clone + Import).
+    Choice resolveAmbiguous(const QString& gameName, const QString& conceptName,
+                            const QString& desired, const softdips::CloneMatch& m);
+
     // UI
     QSplitter* m_splitter;
 
     // Left: game list
     QWidget* m_leftPanel;
     QListWidget* m_gameList;
+    QLineEdit* m_titleFilter;
     QCheckBox* m_selectAllTitles;
     QPushButton* m_createFromRomBtn;
 
@@ -145,9 +185,21 @@ private:
     QLabel* m_gameLabel;
     QPushButton* m_saveButton;
     QPushButton* m_resetButton;
+    QPushButton* m_exportButton;
+    QPushButton* m_importButton;
+    QPushButton* m_shareButton;
+    QCheckBox* m_changedOnlyChk;
     // Maps each table row to its switch (nullptr for Time rows, which are
     // edited live by their composite widget rather than the model text).
     QVector<softdips::DipSwitch*> m_rowSwitch;
+    // Time rows' {min, sec} switches ({nullptr,nullptr} for non-Time rows) —
+    // used to tell whether a Time row differs from its default.
+    QVector<std::pair<softdips::DipSwitch*, softdips::DipSwitch*>> m_rowTimeSw;
+
+    // Undo/redo selection-state snapshots for the current title.
+    QVector<QVector<int>> m_undo, m_redo;
+    QVector<int> m_stateBeforeEdit;
+    bool m_buildingTable = false;  // suppress edit-recording while updateTable runs
 
     // Log
     QTextEdit* m_logView;

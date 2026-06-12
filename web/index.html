@@ -17,6 +17,13 @@
       <button id="toolsBtn" class="menu-btn">Tools ▾</button>
       <div class="menu-list" id="toolsMenu" hidden>
         <button id="cloneBtn">Clone Settings to Selected Titles…</button>
+        <button id="setEverywhereBtn">Set a Setting Across Titles…</button>
+        <div class="menu-divider"></div>
+        <button id="bulkExportBtn">Export All Settings (collection)…</button>
+        <button id="bulkImportBtn">Import Settings Collection…</button>
+        <div class="menu-divider"></div>
+        <button id="backupBtn">Download Backup (.zip)</button>
+        <button id="restoreBtn">Restore from Backup…</button>
         <div class="menu-divider"></div>
         <button id="genAllBtn">Generate .softdips for All Titles…</button>
         <button id="genSelBtn">Generate .softdips for Selected Titles…</button>
@@ -29,10 +36,18 @@
     <button id="aboutBtn">About</button>
   </div>
 
+  <div id="shareBanner" hidden>
+    <span id="shareBannerText"></span>
+    <span class="grow"></span>
+    <button id="shareApply">Apply</button>
+    <button id="shareDismiss">Dismiss</button>
+  </div>
+
   <div id="split">
     <!-- Left: title list -->
     <aside id="left">
       <div class="left-head">Titles</div>
+      <input type="search" id="titleFilter" placeholder="Filter titles…" hidden />
       <label class="checkrow" id="selectAllRow" hidden>
         <input type="checkbox" id="selectAll" /> Select all
       </label>
@@ -53,6 +68,12 @@
       <div id="editorActions">
         <button id="save" disabled>Save</button>
         <button id="reset" disabled>Reset to Defaults</button>
+        <span class="sep"></span>
+        <button id="exportBtn" disabled>Export…</button>
+        <button id="importBtn" disabled>Import…</button>
+        <button id="shareBtn" disabled>Share…</button>
+        <span class="grow"></span>
+        <label class="checkrow"><input type="checkbox" id="changedOnly" /> Changed only</label>
       </div>
       <p class="hint">Tip: check titles on the left, then Tools → Clone Settings to copy this title's settings onto them.</p>
       <div class="log-head">Log</div>

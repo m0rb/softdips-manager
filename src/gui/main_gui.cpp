@@ -4,7 +4,7 @@
 int main(int argc, char* argv[]) {
     QApplication app(argc, argv);
     app.setApplicationName("SoftDips Manager");
-    app.setApplicationVersion("0.1.1");
+    app.setApplicationVersion("0.1.3");
     app.setOrganizationName("morbware");
 
     MainWindow window;

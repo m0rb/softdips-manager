@@ -17,6 +17,15 @@ static QString cleanLabel(const QString& raw) {
 #include <QDateTime>
 #include <QTimer>
 #include <QApplication>
+#include <QJsonDocument>
+#include <QJsonObject>
+#include <QJsonArray>
+#include <QFile>
+#include <QClipboard>
+#include <QPlainTextEdit>
+#include <map>
+#include <set>
+#include <utility>
 
 MainWindow::MainWindow(QWidget* parent)
     : QMainWindow(parent)
@@ -50,6 +59,12 @@ void MainWindow::setupUI() {
     QVBoxLayout* leftLayout = new QVBoxLayout(m_leftPanel);
     leftLayout->setContentsMargins(4,4,4,4);
     leftLayout->addWidget(new QLabel("<center>Titles</center>"));
+
+    m_titleFilter = new QLineEdit();
+    m_titleFilter->setPlaceholderText("Filter titles…");
+    m_titleFilter->setClearButtonEnabled(true);
+    connect(m_titleFilter, &QLineEdit::textChanged, this, &MainWindow::filterTitles);
+    leftLayout->addWidget(m_titleFilter);
 
     // Tristate "select all" checkbox at the top of the title list — toggles the
     // clone-apply checkbox on every title.
@@ -103,8 +118,11 @@ void MainWindow::setupUI() {
     m_model = new QStandardItemModel(0, 2, this);
     m_model->setHorizontalHeaderLabels({"Dip Switch", "Value"});
     m_tableView->setModel(m_model);
-    m_tableView->horizontalHeader()->setStretchLastSection(true);
-    m_tableView->horizontalHeader()->setSectionResizeMode(0, QHeaderView::ResizeToContents);
+    // Form layout: the name column fills the pane, the value column is a fixed,
+    // comfortable width on the right (enough for dropdowns and Time min/sec).
+    m_tableView->horizontalHeader()->setSectionResizeMode(0, QHeaderView::Stretch);
+    m_tableView->horizontalHeader()->setSectionResizeMode(1, QHeaderView::Fixed);
+    m_tableView->setColumnWidth(1, 220);
     m_tableView->verticalHeader()->setVisible(false);
     m_tableView->setSelectionBehavior(QAbstractItemView::SelectRows);
 
@@ -112,7 +130,7 @@ void MainWindow::setupUI() {
     m_tableView->setItemDelegateForColumn(1, m_delegate);
 
     connect(m_model, &QStandardItemModel::itemChanged, this, [this](QStandardItem*) {
-        m_saveButton->setEnabled(true);
+        if (!m_buildingTable) recordEdit();
     });
 
     rightLayout->addWidget(m_tableView, 1);  // table fills the available height
@@ -128,6 +146,30 @@ void MainWindow::setupUI() {
     m_resetButton->setToolTip("Restore this title's factory default settings from its P-ROM");
     connect(m_resetButton, &QPushButton::clicked, this, &MainWindow::resetToDefaults);
     saveRow->addWidget(m_resetButton);
+
+    m_exportButton = new QPushButton("Export…");
+    m_exportButton->setEnabled(false);
+    m_exportButton->setToolTip("Export this title's settings to a JSON profile");
+    connect(m_exportButton, &QPushButton::clicked, this, &MainWindow::exportSettings);
+    saveRow->addWidget(m_exportButton);
+
+    m_importButton = new QPushButton("Import…");
+    m_importButton->setEnabled(false);
+    m_importButton->setToolTip("Apply a JSON settings profile to its matching title");
+    connect(m_importButton, &QPushButton::clicked, this, &MainWindow::importSettings);
+    saveRow->addWidget(m_importButton);
+
+    m_shareButton = new QPushButton("Share…");
+    m_shareButton->setEnabled(false);
+    m_shareButton->setToolTip("Copy this title's settings as JSON, or paste & apply someone else's");
+    connect(m_shareButton, &QPushButton::clicked, this, &MainWindow::shareSettings);
+    saveRow->addWidget(m_shareButton);
+
+    saveRow->addStretch(1);
+    m_changedOnlyChk = new QCheckBox("Changed only");
+    m_changedOnlyChk->setToolTip("Show only settings that differ from their ROM default");
+    connect(m_changedOnlyChk, &QCheckBox::toggled, this, &MainWindow::filterChangedRows);
+    saveRow->addWidget(m_changedOnlyChk);
     rightLayout->addLayout(saveRow);
 
     QLabel* cloneHint = new QLabel(
@@ -178,10 +220,30 @@ void MainWindow::setupMenuBar() {
     exit->setShortcut(QKeySequence::Quit);
     connect(exit, &QAction::triggered, this, &QWidget::close);
 
+    QMenu* edit = menuBar()->addMenu("&Edit");
+    QAction* undoAct = edit->addAction("&Undo");
+    undoAct->setShortcut(QKeySequence::Undo);
+    connect(undoAct, &QAction::triggered, this, &MainWindow::undo);
+    QAction* redoAct = edit->addAction("&Redo");
+    redoAct->setShortcut(QKeySequence::Redo);
+    connect(redoAct, &QAction::triggered, this, &MainWindow::redo);
+
     QMenu* tools = menuBar()->addMenu("&Tools");
     QAction* clone = tools->addAction("&Clone Settings to Selected Titles…");
     clone->setShortcut(QKeySequence("Ctrl+L"));
     connect(clone, &QAction::triggered, this, &MainWindow::cloneSettings);
+    QAction* setAcross = tools->addAction("Set a Setting &Across Titles…");
+    connect(setAcross, &QAction::triggered, this, &MainWindow::setSettingAcrossTitles);
+    tools->addSeparator();
+    QAction* bulkExp = tools->addAction("Export All Settings (collection)…");
+    connect(bulkExp, &QAction::triggered, this, &MainWindow::bulkExportSettings);
+    QAction* bulkImp = tools->addAction("Import Settings Collection…");
+    connect(bulkImp, &QAction::triggered, this, &MainWindow::bulkImportSettings);
+    tools->addSeparator();
+    QAction* backup = tools->addAction("&Backup All Settings…");
+    connect(backup, &QAction::triggered, this, &MainWindow::backupAllSettings);
+    QAction* restore = tools->addAction("&Restore from Backup…");
+    connect(restore, &QAction::triggered, this, &MainWindow::restoreFromBackup);
     tools->addSeparator();
     QAction* genAll = tools->addAction("Generate .softdips for &All Titles…");
     connect(genAll, &QAction::triggered, this, &MainWindow::generateAllSoftdips);
@@ -232,6 +294,8 @@ void MainWindow::saveFile() {
         logMessage("Saved: " + QString::fromStdString(m_currentFilePath));
         statusBar()->showMessage("Saved");
         m_saveButton->setEnabled(false);
+        m_undo.clear(); m_redo.clear();
+        markCurrentDirty(false);
     } else {
         logMessage("FAILED: " + QString::fromStdString(m_currentFilePath));
     }
@@ -280,7 +344,10 @@ void MainWindow::about() {
         "For the BackBit NeoGeo MVS Platinum Cartridge<br><br>"
         "by morb -- <a href=\"https://meson.ninja/\">"
         "https://meson.ninja/</a><br><a href=\"https://github.com/m0rb/softdips-manager\">"
-        "https://github.com/m0rb/softdips-manager/</a></center>");
+        "https://github.com/m0rb/softdips-manager/</a>"
+        "<br><br>Thanks to evie, HornHeaDD, NeoGeo81, lithy, and<br>" 
+        "the rest of The BackBit Forum™ community</center>"  
+    );
 }
 
 void MainWindow::logMessage(const QString& msg) {
@@ -302,11 +369,15 @@ void MainWindow::loadFile(const std::string& filePath) {
     if (!file) { logMessage("ERROR: " + QString::fromStdString(filePath)); return; }
     m_currentFilePath = filePath;
     m_softDipsFile = std::move(file);
+    m_undo.clear(); m_redo.clear();
     m_gameLabel->setText(QString::fromStdString(m_softDipsFile->gameName));
     m_createFromRomBtn->setEnabled(false);
     updateTable();
     updateStatusBar();
     m_saveButton->setEnabled(false);
+    m_exportButton->setEnabled(true);
+    m_importButton->setEnabled(true);
+    m_shareButton->setEnabled(true);
     logMessage("Loaded: " + QString::fromStdString(m_softDipsFile->gameName));
 }
 
@@ -392,6 +463,8 @@ void MainWindow::onGameClicked(int row) {
 
 void MainWindow::selectGame(int index) {
     if (index < 0 || index >= (int)m_games.size()) return;
+    markCurrentDirty(false);          // clear the marker on the title we're leaving
+    m_undo.clear(); m_redo.clear();
     m_currentGameIndex = index;
     const auto& game = m_games[index];
 
@@ -402,6 +475,9 @@ void MainWindow::selectGame(int index) {
         m_gameLabel->setText(QString::fromStdString(game.dirName) + " (no .softdips)");
         m_saveButton->setEnabled(false);
         m_resetButton->setEnabled(false);
+        m_exportButton->setEnabled(false);
+        m_importButton->setEnabled(false);
+        m_shareButton->setEnabled(false);
         m_createFromRomBtn->setEnabled(true);
         updateStatusBar();
         return;
@@ -414,6 +490,9 @@ void MainWindow::selectGame(int index) {
     updateTable();
     updateStatusBar();
     m_saveButton->setEnabled(false);
+    m_exportButton->setEnabled(true);
+    m_importButton->setEnabled(true);
+    m_shareButton->setEnabled(true);
     // Reset is available only if the P-ROM is on hand to read factory defaults.
     m_resetButton->setEnabled(
         !softdips::SoftDipsParser::findProgramRoms(game.dirPath).empty());
@@ -453,7 +532,7 @@ QWidget* MainWindow::makeTimeWidget(softdips::DipSwitch* minSw,
         // Update the switch live; the row maps to no model text (see m_rowSwitch).
         connect(cb, QOverload<int>::of(&QComboBox::activated), this, [this, s](int idx) {
             s->currentIndex = idx;
-            m_saveButton->setEnabled(true);
+            recordEdit();
         });
         lay->addWidget(cb);
         lay->addWidget(new QLabel(unit));
@@ -465,12 +544,14 @@ QWidget* MainWindow::makeTimeWidget(softdips::DipSwitch* minSw,
 }
 
 void MainWindow::updateTable() {
+    m_buildingTable = true;  // suppress edit-recording from programmatic changes
     // Remove any composite index widgets before clearing the rows.
     for (int r = 0; r < m_model->rowCount(); r++)
         m_tableView->setIndexWidget(m_model->index(r, 1), nullptr);
     m_model->removeRows(0, m_model->rowCount());
     m_rowSwitch.clear();
-    if (!m_softDipsFile) return;
+    m_rowTimeSw.clear();
+    if (!m_softDipsFile) { m_buildingTable = false; return; }
 
     auto allSwitches = m_softDipsFile->getAllSwitches();
     for (size_t i = 0; i < allSwitches.size(); ) {
@@ -495,6 +576,7 @@ void MainWindow::updateTable() {
             int row = m_model->rowCount();
             m_model->appendRow({ni, vi});
             m_rowSwitch.push_back(nullptr);  // edited live by the widget
+            m_rowTimeSw.push_back({sw, secSw});
             m_tableView->setIndexWidget(m_model->index(row, 1), makeTimeWidget(sw, secSw));
             if (secSw) i++;  // consume the SEC half
             continue;
@@ -515,9 +597,71 @@ void MainWindow::updateTable() {
 
         m_model->appendRow({ni, vi});
         m_rowSwitch.push_back(sw);
+        m_rowTimeSw.push_back({nullptr, nullptr});
     }
-    m_tableView->resizeColumnsToContents();
-    m_tableView->resizeRowsToContents();
+    m_tableView->resizeRowsToContents();  // columns stretch (set in setupUI)
+    filterChangedRows();
+    m_buildingTable = false;
+    m_stateBeforeEdit = selectionState();  // baseline for the next edit
+}
+
+// ── Undo / redo (selection-state snapshots) ──
+QVector<int> MainWindow::selectionState() const {
+    QVector<int> s;
+    if (m_softDipsFile)
+        for (const auto* sw : m_softDipsFile->getAllSwitches()) s.push_back(sw->currentIndex);
+    return s;
+}
+void MainWindow::applyState(const QVector<int>& s) {
+    if (!m_softDipsFile) return;
+    auto sws = m_softDipsFile->getAllSwitches();
+    for (int i = 0; i < (int)sws.size() && i < s.size(); i++) sws[i]->currentIndex = s[i];
+}
+void MainWindow::recordEdit() {
+    if (m_buildingTable || !m_softDipsFile) return;
+    m_undo.push_back(m_stateBeforeEdit);
+    m_redo.clear();
+    syncTableToSource();                  // pull a List edit into m_softDipsFile
+    m_stateBeforeEdit = selectionState();
+    m_saveButton->setEnabled(true);
+    markCurrentDirty(true);
+}
+void MainWindow::undo() {
+    if (m_undo.isEmpty() || !m_softDipsFile) return;
+    m_redo.push_back(selectionState());
+    applyState(m_undo.takeLast());
+    if (m_currentGameIndex >= 0 && m_currentGameIndex < (int)m_games.size())
+        m_games[m_currentGameIndex].softDips = m_softDipsFile;
+    updateTable();                        // rebuilds UI + resets m_stateBeforeEdit
+    bool dirty = !m_undo.isEmpty();
+    m_saveButton->setEnabled(dirty);
+    markCurrentDirty(dirty);
+}
+void MainWindow::redo() {
+    if (m_redo.isEmpty() || !m_softDipsFile) return;
+    m_undo.push_back(selectionState());
+    applyState(m_redo.takeLast());
+    if (m_currentGameIndex >= 0 && m_currentGameIndex < (int)m_games.size())
+        m_games[m_currentGameIndex].softDips = m_softDipsFile;
+    updateTable();
+    m_saveButton->setEnabled(true);
+    markCurrentDirty(true);
+}
+void MainWindow::markCurrentDirty(bool dirty) {
+    if (m_currentGameIndex < 0 || m_currentGameIndex >= m_gameList->count()) return;
+    auto* item = m_gameList->item(m_currentGameIndex);
+    if (!item) return;
+    QString t = item->text();
+    bool has = t.endsWith(" ●");
+    if (dirty && !has) item->setText(t + " ●");
+    else if (!dirty && has) item->setText(t.left(t.length() - 2));
+}
+void MainWindow::filterTitles(const QString& query) {
+    for (int i = 0; i < m_gameList->count() && i < (int)m_games.size(); i++) {
+        QString hay = QString::fromStdString(m_games[i].dirName);
+        if (m_games[i].softDips) hay += " " + QString::fromStdString(m_games[i].softDips->gameName);
+        m_gameList->item(i)->setHidden(!query.isEmpty() && !hay.contains(query, Qt::CaseInsensitive));
+    }
 }
 
 // Read the table's current selections back into m_softDipsFile (the object the
@@ -690,50 +834,8 @@ void MainWindow::executeClone(const std::vector<CloneItem>& toApply,
         }
     }
 
-    // Interactive resolver for ambiguous matches: lets the user pick the right
-    // switch/value, skip this title, or apply the decision to all remaining
-    // titles for this setting.
-    struct Choice { bool skip = true; std::string switchName; int optionIndex = -1; bool repeat = false; };
-    auto askResolve = [this](const QString& gameName, const QString& concept,
-                             const QString& desired,
-                             const softdips::CloneMatch& m) -> Choice {
-        QDialog dlg(this);
-        dlg.setWindowTitle("Confirm Setting");
-        auto* lay = new QVBoxLayout(&dlg);
-        lay->addWidget(new QLabel(
-            QString("<b>%1</b><br>Set <b>%2</b> to <b>%3</b> — choose how to apply it:")
-                .arg(gameName.toHtmlEscaped(), concept.toHtmlEscaped(), desired.toHtmlEscaped())));
-        auto* combo = new QComboBox();
-        for (const auto& c : m.candidates)
-            combo->addItem(QString::fromStdString(c.switchName) + "  →  " +
-                           QString::fromStdString(c.optionName));
-        lay->addWidget(combo);
-        auto* repeatChk = new QCheckBox("Apply this decision to all remaining titles for this setting");
-        lay->addWidget(repeatChk);
-        auto* row = new QHBoxLayout();
-        auto* skipBtn = new QPushButton("Skip");
-        auto* applyBtn = new QPushButton("Apply");
-        applyBtn->setDefault(true);
-        row->addStretch(1); row->addWidget(skipBtn); row->addWidget(applyBtn);
-        lay->addLayout(row);
-
-        Choice ch;
-        connect(applyBtn, &QPushButton::clicked, &dlg, [&]() { ch.skip = false; dlg.accept(); });
-        connect(skipBtn,  &QPushButton::clicked, &dlg, [&]() { ch.skip = true;  dlg.accept(); });
-        dlg.exec();
-
-        ch.repeat = repeatChk->isChecked();
-        if (!ch.skip) {
-            int i = combo->currentIndex();
-            if (i >= 0 && i < (int)m.candidates.size()) {
-                ch.switchName = m.candidates[i].switchName;
-                ch.optionIndex = m.candidates[i].optionIndex;
-            }
-        }
-        return ch;
-    };
-
     // ── EXECUTE (setting-outer so a "repeat" decision carries to later titles) ──
+    autoBackupIfEnabled("clone/apply");
     logMessage("─── Clone Apply ───");
     std::vector<bool> modified(m_games.size(), false);
 
@@ -765,8 +867,8 @@ void MainWindow::executeClone(const std::vector<CloneItem>& toApply,
                     useSwitch = m.candidates[0].switchName;
                     useOpt = m.candidates[0].optionIndex;
                 } else {
-                    Choice ch = askResolve(gn, QString::fromStdString(s.name),
-                                           QString::fromStdString(s.newValue), m);
+                    Choice ch = resolveAmbiguous(gn, QString::fromStdString(s.name),
+                                                 QString::fromStdString(s.newValue), m);
                     if (ch.repeat) repeatMode = ch.skip ? SkipAll : AutoApply;
                     if (ch.skip) {
                         logMessage("   ⚠ " + gn + ": skipped by user");
@@ -804,6 +906,543 @@ void MainWindow::executeClone(const std::vector<CloneItem>& toApply,
         .arg(failed ? QString(", %1 save error(s)").arg(failed) : QString()));
 
     if (m_currentGameIndex >= 0) selectGame(m_currentGameIndex);
+}
+
+// ── Settings profiles (export / import / bulk) ──
+// Profile JSON (shared with the web app):
+//   { app, v:1, gameName, settings:[{name,value}] }
+
+MainWindow::Choice MainWindow::resolveAmbiguous(const QString& gameName, const QString& conceptName,
+                                                const QString& desired, const softdips::CloneMatch& m) {
+    QDialog dlg(this);
+    dlg.setWindowTitle("Confirm Setting");
+    auto* lay = new QVBoxLayout(&dlg);
+    lay->addWidget(new QLabel(
+        QString("<b>%1</b><br>Set <b>%2</b> to <b>%3</b> — choose how to apply it:")
+            .arg(gameName.toHtmlEscaped(), conceptName.toHtmlEscaped(), desired.toHtmlEscaped())));
+    auto* combo = new QComboBox();
+    for (const auto& c : m.candidates)
+        combo->addItem(QString::fromStdString(c.switchName) + "  →  " +
+                       QString::fromStdString(c.optionName));
+    lay->addWidget(combo);
+    auto* repeatChk = new QCheckBox("Apply this decision to all remaining titles for this setting");
+    lay->addWidget(repeatChk);
+    auto* row = new QHBoxLayout();
+    auto* skipBtn = new QPushButton("Skip");
+    auto* applyBtn = new QPushButton("Apply");
+    applyBtn->setDefault(true);
+    row->addStretch(1); row->addWidget(skipBtn); row->addWidget(applyBtn);
+    lay->addLayout(row);
+
+    Choice ch;
+    connect(applyBtn, &QPushButton::clicked, &dlg, [&]() { ch.skip = false; dlg.accept(); });
+    connect(skipBtn,  &QPushButton::clicked, &dlg, [&]() { ch.skip = true;  dlg.accept(); });
+    dlg.exec();
+
+    ch.repeat = repeatChk->isChecked();
+    if (!ch.skip) {
+        int i = combo->currentIndex();
+        if (i >= 0 && i < (int)m.candidates.size()) {
+            ch.switchName = m.candidates[i].switchName;
+            ch.optionIndex = m.candidates[i].optionIndex;
+        }
+    }
+    return ch;
+}
+
+std::vector<MainWindow::CloneItem> MainWindow::settingsOf(const softdips::SoftDipsFile& file) const {
+    std::vector<CloneItem> items;
+    for (const auto* sw : file.getAllSwitches())
+        if (sw->currentIndex >= 0 && sw->currentIndex < (int)sw->options.size())
+            items.push_back({sw->name, sw->options[sw->currentIndex].name});
+    return items;
+}
+
+int MainWindow::applyProfileToFile(const std::vector<CloneItem>& items,
+                                   softdips::SoftDipsFile& file, const QString& label) {
+    using Kind = softdips::CloneMatch::Kind;
+    logMessage("─── " + label + " ───");
+    int applied = 0;
+    for (const auto& s : items) {
+        auto m = softdips::SoftDipsParser::matchSetting(file, s.name, s.newValue);
+        std::string useSwitch; int useOpt = -1;
+        if (m.kind == Kind::NotFound) {
+            logMessage("   ⚠ " + QString::fromStdString(s.name) + ": no match — skipped");
+            continue;
+        } else if (m.kind == Kind::Confident) {
+            useSwitch = m.candidates[0].switchName; useOpt = m.candidates[0].optionIndex;
+        } else {
+            Choice ch = resolveAmbiguous(QString::fromStdString(file.gameName),
+                                         QString::fromStdString(s.name),
+                                         QString::fromStdString(s.newValue), m);
+            if (ch.skip) { logMessage("   ⚠ " + QString::fromStdString(s.name) + ": skipped"); continue; }
+            useSwitch = ch.switchName; useOpt = ch.optionIndex;
+        }
+        auto* sw = file.findSwitch(useSwitch);
+        if (sw && useOpt >= 0 && useOpt < (int)sw->options.size()) {
+            sw->currentIndex = useOpt; applied++;
+            logMessage("   ✓ " + QString::fromStdString(sw->name) + " = " +
+                       QString::fromStdString(sw->options[useOpt].name));
+        }
+    }
+    return applied;
+}
+
+QString MainWindow::profileJson(const softdips::SoftDipsFile& file, bool compact) const {
+    QJsonArray arr;
+    for (const auto& it : settingsOf(file)) {
+        QJsonObject o;
+        o["name"]  = QString::fromStdString(it.name);
+        o["value"] = QString::fromStdString(it.newValue);
+        arr.append(o);
+    }
+    QJsonObject root;
+    root["app"] = "softdips-manager";
+    root["v"] = 1;
+    root["gameName"] = QString::fromStdString(file.gameName);
+    root["settings"] = arr;
+    return QString::fromUtf8(QJsonDocument(root).toJson(
+        compact ? QJsonDocument::Compact : QJsonDocument::Indented));
+}
+
+void MainWindow::exportSettings() {
+    if (!m_softDipsFile) {
+        QMessageBox::information(this, "Export Settings", "Open a title first.");
+        return;
+    }
+    syncTableToSource();
+    const QString json = profileJson(*m_softDipsFile);
+
+    QString safe;
+    for (QChar c : QString::fromStdString(m_softDipsFile->gameName).simplified())
+        safe += (c.isLetterOrNumber() || c == ' ' || c == '.' || c == '_' || c == '-') ? c : QChar('_');
+    if (safe.trimmed().isEmpty()) safe = "settings";
+
+    QString path = QFileDialog::getSaveFileName(this, "Export Settings",
+        safe + ".softdips.json", "Settings JSON (*.json)");
+    if (path.isEmpty()) return;
+    QFile f(path);
+    if (!f.open(QIODevice::WriteOnly)) {
+        QMessageBox::warning(this, "Export Settings", "Could not write file.");
+        return;
+    }
+    f.write(json.toUtf8());
+    logMessage("Exported settings: " + path);
+}
+
+void MainWindow::shareSettings() {
+    if (!m_softDipsFile) return;
+    syncTableToSource();
+    const QString code = QString::fromUtf8(profileJson(*m_softDipsFile, true).toUtf8()
+        .toBase64(QByteArray::Base64UrlEncoding | QByteArray::OmitTrailingEquals));
+
+    QDialog dlg(this);
+    dlg.setWindowTitle("Share Settings");
+    dlg.setMinimumWidth(440);
+    auto* lay = new QVBoxLayout(&dlg);
+    lay->addWidget(new QLabel("A share code for this title's settings. Copy it, or paste a code "
+                              "(or raw JSON) here and Apply:"));
+    auto* text = new QPlainTextEdit(code);
+    lay->addWidget(text);
+
+    auto* row = new QHBoxLayout();
+    auto* copyBtn = new QPushButton("Copy");
+    auto* applyBtn = new QPushButton("Apply");
+    auto* closeBtn = new QPushButton("Close");
+    row->addWidget(copyBtn); row->addWidget(applyBtn); row->addStretch(1); row->addWidget(closeBtn);
+    lay->addLayout(row);
+
+    connect(copyBtn, &QPushButton::clicked, &dlg, [text]() { QApplication::clipboard()->setText(text->toPlainText()); });
+    connect(closeBtn, &QPushButton::clicked, &dlg, &QDialog::accept);
+    connect(applyBtn, &QPushButton::clicked, &dlg, [this, &dlg, text]() {
+        // Accept a base64 share code, a web share link (…#s=CODE), or raw JSON.
+        QString in = text->toPlainText().trimmed();
+        int h = in.indexOf("#s=");
+        if (h >= 0) in = in.mid(h + 3).trimmed();
+        QByteArray jsonBytes = in.startsWith('{') ? in.toUtf8()
+            : QByteArray::fromBase64(in.toUtf8(), QByteArray::Base64UrlEncoding);
+
+        QJsonParseError err;
+        QJsonDocument doc = QJsonDocument::fromJson(jsonBytes, &err);
+        if (err.error != QJsonParseError::NoError || !doc.isObject()) {
+            QMessageBox::warning(&dlg, "Share Settings", "That isn't a valid share code or profile.");
+            return;
+        }
+        std::vector<CloneItem> items;
+        for (const auto& v : doc.object().value("settings").toArray()) {
+            QJsonObject o = v.toObject();
+            if (o.contains("name") && o.contains("value"))
+                items.push_back({o["name"].toString().toStdString(), o["value"].toString().toStdString()});
+        }
+        if (items.empty()) { QMessageBox::warning(&dlg, "Share Settings", "No settings found."); return; }
+        dlg.accept();
+        applyImportedProfile(items, doc.object().value("gameName").toString().trimmed());
+    });
+    dlg.exec();
+}
+
+void MainWindow::filterChangedRows() {
+    const bool on = m_changedOnlyChk && m_changedOnlyChk->isChecked();
+    for (int row = 0; row < m_model->rowCount(); row++) {
+        bool changed = false;
+        if (row < m_rowSwitch.size() && m_rowSwitch[row]) {
+            auto* sw = m_rowSwitch[row];
+            changed = sw->currentIndex != sw->defaultIndex;
+        } else if (row < m_rowTimeSw.size() && m_rowTimeSw[row].first) {
+            auto* mn = m_rowTimeSw[row].first;
+            auto* sc = m_rowTimeSw[row].second;
+            changed = (mn->currentIndex != mn->defaultIndex) ||
+                      (sc && sc->currentIndex != sc->defaultIndex);
+        }
+        m_tableView->setRowHidden(row, on && !changed);
+    }
+}
+
+void MainWindow::importSettings() {
+    if (!m_softDipsFile) {
+        QMessageBox::information(this, "Import Settings", "Open a title to import into first.");
+        return;
+    }
+    QString path = QFileDialog::getOpenFileName(this, "Import Settings", QString(),
+        "Settings JSON (*.json);;All (*)");
+    if (path.isEmpty()) return;
+    QFile f(path);
+    if (!f.open(QIODevice::ReadOnly)) {
+        QMessageBox::warning(this, "Import Settings", "Could not read file.");
+        return;
+    }
+    QJsonParseError err;
+    QJsonDocument doc = QJsonDocument::fromJson(f.readAll(), &err);
+    if (err.error != QJsonParseError::NoError || !doc.isObject()) {
+        QMessageBox::warning(this, "Import Settings", "Not a valid settings profile.");
+        return;
+    }
+    std::vector<CloneItem> items;
+    for (const auto& v : doc.object().value("settings").toArray()) {
+        QJsonObject o = v.toObject();
+        if (o.contains("name") && o.contains("value"))
+            items.push_back({o["name"].toString().toStdString(),
+                             o["value"].toString().toStdString()});
+    }
+    if (items.empty()) {
+        QMessageBox::warning(this, "Import Settings", "Profile has no settings.");
+        return;
+    }
+
+    applyImportedProfile(items, doc.object().value("gameName").toString().trimmed());
+}
+
+void MainWindow::applyImportedProfile(const std::vector<CloneItem>& items, const QString& wantName) {
+    if (items.empty()) return;
+    auto sameName = [](const QString& a, const QString& b) {
+        return a.trimmed().compare(b.trimmed(), Qt::CaseInsensitive) == 0;
+    };
+
+    // Folder mode: find the title these settings are for and offer to switch to it.
+    if (!m_games.empty()) {
+        int match = -1;
+        for (int i = 0; i < (int)m_games.size(); i++)
+            if (m_games[i].hasSoftDips && m_games[i].softDips &&
+                sameName(QString::fromStdString(m_games[i].softDips->gameName), wantName)) { match = i; break; }
+
+        if (match >= 0 && match != m_currentGameIndex) {
+            auto r = QMessageBox::question(this, "Apply Settings",
+                QString("These settings are for \"%1\". Switch to that title and apply?")
+                    .arg(QString::fromStdString(m_games[match].softDips->gameName)),
+                QMessageBox::Yes | QMessageBox::No, QMessageBox::Yes);
+            if (r != QMessageBox::Yes) return;
+            m_gameList->setCurrentRow(match);          // selectGame via signal (unsaved guard)
+            if (m_currentGameIndex != match) return;   // switch cancelled
+        } else if (match < 0) {
+            if (!m_softDipsFile) { QMessageBox::information(this, "Apply Settings", "Open a title first."); return; }
+            auto r = QMessageBox::question(this, "Apply Settings",
+                QString("These settings are for \"%1\", which isn't in this folder.\n\n"
+                        "Apply to the current title \"%2\" anyway?")
+                    .arg(wantName.isEmpty() ? QString("(unknown)") : wantName,
+                         QString::fromStdString(m_softDipsFile->gameName)),
+                QMessageBox::Yes | QMessageBox::No, QMessageBox::No);
+            if (r != QMessageBox::Yes) return;
+        }
+        syncTableToSource();
+        executeClone(items, { m_currentGameIndex });
+        return;
+    }
+
+    // Single-file mode.
+    if (!m_softDipsFile) return;
+    if (!wantName.isEmpty() && !sameName(QString::fromStdString(m_softDipsFile->gameName), wantName)) {
+        auto r = QMessageBox::question(this, "Apply Settings",
+            QString("These settings are for \"%1\" but the open file is \"%2\".\n\nApply anyway?")
+                .arg(wantName, QString::fromStdString(m_softDipsFile->gameName)),
+            QMessageBox::Yes | QMessageBox::No, QMessageBox::No);
+        if (r != QMessageBox::Yes) return;
+    }
+    syncTableToSource();
+    int n = applyProfileToFile(items, *m_softDipsFile, "Import");
+    if (n > 0) {
+        updateTable();
+        m_saveButton->setEnabled(true);
+        logMessage(QString("Applied %1 setting(s) — review and Save.").arg(n));
+    } else {
+        QMessageBox::information(this, "Apply Settings", "No settings matched this title.");
+    }
+}
+
+void MainWindow::bulkExportSettings() {
+    if (m_games.empty()) {
+        QMessageBox::information(this, "Export All Settings", "Open a folder first.");
+        return;
+    }
+    syncTableToSource();
+    QJsonArray titles;
+    for (const auto& g : m_games) {
+        if (!g.hasSoftDips || !g.softDips) continue;
+        QJsonArray arr;
+        for (const auto& it : settingsOf(*g.softDips)) {
+            QJsonObject o;
+            o["name"]  = QString::fromStdString(it.name);
+            o["value"] = QString::fromStdString(it.newValue);
+            arr.append(o);
+        }
+        QJsonObject t;
+        t["gameName"] = QString::fromStdString(g.softDips->gameName);
+        t["dir"]      = QString::fromStdString(g.dirName);
+        t["settings"] = arr;
+        titles.append(t);
+    }
+    if (titles.isEmpty()) {
+        QMessageBox::information(this, "Export All Settings", "No titles with settings to export.");
+        return;
+    }
+    QJsonObject root;
+    root["app"] = "softdips-manager";
+    root["v"] = 1;
+    root["type"] = "collection";
+    root["titles"] = titles;
+
+    QString path = QFileDialog::getSaveFileName(this, "Export All Settings",
+        "collection.softdips-collection.json", "Settings collection (*.json)");
+    if (path.isEmpty()) return;
+    QFile f(path);
+    if (!f.open(QIODevice::WriteOnly)) {
+        QMessageBox::warning(this, "Export All Settings", "Could not write file.");
+        return;
+    }
+    f.write(QJsonDocument(root).toJson(QJsonDocument::Indented));
+    logMessage(QString("Bulk exported %1 title(s).").arg(titles.size()));
+}
+
+void MainWindow::bulkImportSettings() {
+    if (m_games.empty()) {
+        QMessageBox::information(this, "Import Settings Collection", "Open a folder first.");
+        return;
+    }
+    QString path = QFileDialog::getOpenFileName(this, "Import Settings Collection", QString(),
+        "Settings collection (*.json);;All (*)");
+    if (path.isEmpty()) return;
+    QFile f(path);
+    if (!f.open(QIODevice::ReadOnly)) {
+        QMessageBox::warning(this, "Import Settings Collection", "Could not read file.");
+        return;
+    }
+    QJsonParseError err;
+    QJsonDocument doc = QJsonDocument::fromJson(f.readAll(), &err);
+    if (err.error != QJsonParseError::NoError || !doc.isObject() ||
+        !doc.object().value("titles").isArray()) {
+        QMessageBox::warning(this, "Import Settings Collection", "Not a collection file.");
+        return;
+    }
+    auto sameName = [](const QString& a, const QString& b) {
+        return a.trimmed().compare(b.trimmed(), Qt::CaseInsensitive) == 0;
+    };
+
+    // Match each entry to a loaded title (by dir, then game name).
+    struct Job { int idx; std::vector<CloneItem> items; };
+    std::vector<Job> jobs; int unmatched = 0;
+    for (const auto& tv : doc.object().value("titles").toArray()) {
+        QJsonObject t = tv.toObject();
+        std::vector<CloneItem> items;
+        for (const auto& v : t.value("settings").toArray()) {
+            QJsonObject o = v.toObject();
+            if (o.contains("name") && o.contains("value"))
+                items.push_back({o["name"].toString().toStdString(), o["value"].toString().toStdString()});
+        }
+        if (items.empty()) continue;
+        QString dir = t.value("dir").toString();
+        QString gn  = t.value("gameName").toString();
+        int idx = -1;
+        for (int i = 0; i < (int)m_games.size() && idx < 0; i++)
+            if (m_games[i].hasSoftDips && m_games[i].softDips &&
+                QString::fromStdString(m_games[i].dirName) == dir) idx = i;
+        for (int i = 0; i < (int)m_games.size() && idx < 0; i++)
+            if (m_games[i].hasSoftDips && m_games[i].softDips &&
+                sameName(QString::fromStdString(m_games[i].softDips->gameName), gn)) idx = i;
+        if (idx >= 0) jobs.push_back({idx, std::move(items)});
+        else unmatched++;
+    }
+    if (jobs.empty()) {
+        QMessageBox::information(this, "Import Settings Collection",
+            "None of the titles in this file match the open folder.");
+        return;
+    }
+    auto r = QMessageBox::question(this, "Import Settings Collection",
+        QString("Apply settings to %1 matched title(s)?%2\n\nAmbiguous matches will prompt.")
+            .arg(jobs.size())
+            .arg(unmatched ? QString("\n%1 title(s) had no match (skipped).").arg(unmatched) : QString()),
+        QMessageBox::Yes | QMessageBox::No, QMessageBox::No);
+    if (r != QMessageBox::Yes) return;
+
+    autoBackupIfEnabled("bulk import");
+    logMessage("─── Bulk Import ───");
+    int saved = 0, failed = 0;
+    for (const auto& j : jobs) {
+        auto& g = m_games[j.idx];
+        if (applyProfileToFile(j.items, *g.softDips, QString::fromStdString(g.softDips->gameName)) <= 0) continue;
+        if (softdips::SoftDipsParser::write(g.filePath, *g.softDips)) saved++;
+        else { failed++; logMessage("   ✗ save failed: " + QString::fromStdString(g.dirName)); }
+    }
+    logMessage(QString("─── Bulk Import done: %1 saved%2 ───")
+        .arg(saved).arg(failed ? QString(", %1 error(s)").arg(failed) : QString()));
+    if (m_currentGameIndex >= 0) selectGame(m_currentGameIndex);
+    QMessageBox::information(this, "Import Settings Collection",
+        QString("Updated %1 title(s).").arg(saved));
+}
+
+// ── Backup / restore (off-card; to the configured backup folder) ──
+
+int MainWindow::backupToDir(const QString& destRoot) {
+    int n = 0;
+    for (const auto& g : m_games) {
+        if (!g.hasSoftDips || g.filePath.empty()) continue;
+        QString d = destRoot + "/" + QString::fromStdString(g.dirName);
+        QDir().mkpath(d);
+        QString dst = d + "/.softdips";
+        QFile::remove(dst);
+        if (QFile::copy(QString::fromStdString(g.filePath), dst)) n++;
+    }
+    return n;
+}
+
+void MainWindow::autoBackupIfEnabled(const QString& reason) {
+    if (!appsettings::autoBackup() || m_games.empty()) return;
+    QString root = appsettings::backupDir() + "/auto-" +
+                   QDateTime::currentDateTime().toString("yyyyMMdd-HHmmss");
+    int n = backupToDir(root);
+    if (n > 0) logMessage(QString("Auto-backup (%1): %2 title(s) → %3").arg(reason).arg(n).arg(root));
+}
+
+void MainWindow::backupAllSettings() {
+    if (m_games.empty()) {
+        QMessageBox::information(this, "Backup", "Open a folder first.");
+        return;
+    }
+    QString root = appsettings::backupDir() + "/" +
+                   QDateTime::currentDateTime().toString("yyyyMMdd-HHmmss");
+    int n = backupToDir(root);
+    if (n > 0) {
+        logMessage(QString("Backed up %1 title(s) → %2").arg(n).arg(root));
+        QMessageBox::information(this, "Backup",
+            QString("Backed up %1 title(s) to:\n%2").arg(n).arg(root));
+    } else {
+        QMessageBox::information(this, "Backup", "No .softdips files to back up.");
+    }
+}
+
+void MainWindow::restoreFromBackup() {
+    if (m_games.empty()) {
+        QMessageBox::information(this, "Restore", "Open the folder to restore into first.");
+        return;
+    }
+    QString root = QFileDialog::getExistingDirectory(this, "Restore from Backup",
+                                                     appsettings::backupDir());
+    if (root.isEmpty()) return;
+
+    std::vector<int> toRestore;
+    for (int i = 0; i < (int)m_games.size(); i++)
+        if (QFile::exists(root + "/" + QString::fromStdString(m_games[i].dirName) + "/.softdips"))
+            toRestore.push_back(i);
+    if (toRestore.empty()) {
+        QMessageBox::information(this, "Restore", "No backups in that folder match this collection.");
+        return;
+    }
+    auto r = QMessageBox::question(this, "Restore Backup",
+        QString("Overwrite .softdips for %1 title(s) from the backup?\n\n"
+                "This replaces their current settings.").arg(toRestore.size()),
+        QMessageBox::Yes | QMessageBox::No, QMessageBox::No);
+    if (r != QMessageBox::Yes) return;
+
+    logMessage("─── Restore Backup ───");
+    int restored = 0;
+    for (int i : toRestore) {
+        auto& g = m_games[i];
+        QString src = root + "/" + QString::fromStdString(g.dirName) + "/.softdips";
+        QString dst = g.filePath.empty() ? QString::fromStdString(g.dirPath) + "/.softdips"
+                                         : QString::fromStdString(g.filePath);
+        QFile::remove(dst);
+        if (!QFile::copy(src, dst)) { logMessage("  ✗ " + QString::fromStdString(g.dirName) + ": copy failed"); continue; }
+        g.filePath = dst.toStdString();
+        g.hasSoftDips = true;
+        if (auto parsed = softdips::SoftDipsParser::parse(g.filePath)) g.softDips = parsed;
+        if (auto* item = m_gameList->item(i)) item->setText("✓ " + QString::fromStdString(g.dirName));
+        restored++;
+        logMessage("  ✓ " + QString::fromStdString(g.dirName));
+    }
+    if (m_currentGameIndex >= 0) selectGame(m_currentGameIndex);
+    logMessage(QString("─── Restore done: %1 restored ───").arg(restored));
+    QMessageBox::information(this, "Restore", QString("Restored %1 title(s).").arg(restored));
+}
+
+void MainWindow::setSettingAcrossTitles() {
+    if (m_games.empty()) {
+        QMessageBox::information(this, "Set a Setting Across Titles", "Open a folder first.");
+        return;
+    }
+    // Catalog: setting name → values seen across loaded titles.
+    std::vector<int> targets;
+    std::map<QString, std::set<QString>> catalog;
+    for (int i = 0; i < (int)m_games.size(); i++) {
+        if (!m_games[i].hasSoftDips || !m_games[i].softDips) continue;
+        targets.push_back(i);
+        for (const auto* sw : m_games[i].softDips->getAllSwitches()) {
+            auto& vals = catalog[cleanLabel(QString::fromStdString(sw->name))];
+            for (const auto& o : sw->options) vals.insert(cleanLabel(QString::fromStdString(o.name)));
+        }
+    }
+    if (catalog.empty()) {
+        QMessageBox::information(this, "Set a Setting Across Titles", "No titles with settings are loaded.");
+        return;
+    }
+
+    QDialog dlg(this);
+    dlg.setWindowTitle("Set a Setting Across Titles");
+    auto* lay = new QVBoxLayout(&dlg);
+    lay->addWidget(new QLabel(QString("Apply one setting to all %1 title(s) that have it:")
+                                  .arg(targets.size())));
+    auto* nameCombo = new QComboBox();
+    for (const auto& kv : catalog) nameCombo->addItem(kv.first);
+    lay->addWidget(nameCombo);
+    auto* valCombo = new QComboBox();
+    lay->addWidget(valCombo);
+    auto fillVals = [&]() {
+        valCombo->clear();
+        for (const auto& v : catalog[nameCombo->currentText()]) valCombo->addItem(v);
+    };
+    connect(nameCombo, &QComboBox::currentTextChanged, &dlg, [&](const QString&) { fillVals(); });
+    fillVals();
+
+    auto* row = new QHBoxLayout();
+    auto* cancelBtn = new QPushButton("Cancel");
+    auto* applyBtn = new QPushButton("Apply…");
+    applyBtn->setDefault(true);
+    row->addStretch(1); row->addWidget(cancelBtn); row->addWidget(applyBtn);
+    lay->addLayout(row);
+    connect(cancelBtn, &QPushButton::clicked, &dlg, &QDialog::reject);
+    connect(applyBtn, &QPushButton::clicked, &dlg, &QDialog::accept);
+    if (dlg.exec() != QDialog::Accepted) return;
+
+    std::vector<CloneItem> items = {{ nameCombo->currentText().toStdString(),
+                                      valCombo->currentText().toStdString() }};
+    executeClone(items, targets);
 }
 
 // ── P-ROM extraction ──
@@ -1009,6 +1648,7 @@ void MainWindow::auditTitles() {
         QMessageBox::Yes | QMessageBox::No, QMessageBox::No);
     if (reply != QMessageBox::Yes) return;
 
+    autoBackupIfEnabled("audit regenerate");
     int rebuilt = 0;
     for (int i : regenerable) {
         auto& g = m_games[i];

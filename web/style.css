@@ -89,6 +89,11 @@ button:disabled { opacity: 0.4; cursor: default; }
 }
 .left-head { text-align: center; font-weight: 600; color: var(--muted); }
 .checkrow { display: flex; align-items: center; gap: 6px; font-size: 13px; cursor: pointer; }
+#titleFilter {
+  background: var(--panel-2); color: var(--text);
+  border: 1px solid var(--border); border-radius: 6px;
+  padding: 5px 8px; font-size: 13px;
+}
 
 #gameList {
   list-style: none; margin: 0; padding: 0;
@@ -107,6 +112,8 @@ button:disabled { opacity: 0.4; cursor: default; }
 #gameList li:nth-child(even) { background: var(--row-alt); }
 #gameList li:hover { background: var(--panel-2); }
 #gameList li.selected { background: var(--accent-2); color: #fff; }
+#gameList li.dirty::after { content: "●"; color: var(--accent); margin-left: auto; padding-left: 6px; }
+#gameList li.dirty.selected::after { color: #fff; }
 #gameList li .glyph { width: 1.2em; text-align: center; }
 #gameList li .gname { flex: 1; overflow: hidden; text-overflow: ellipsis; }
 #gameList li input[type=checkbox] { flex: 0 0 auto; }
@@ -126,7 +133,9 @@ button:disabled { opacity: 0.4; cursor: default; }
 }
 #switchTable td { padding: 5px 10px; border-bottom: 1px solid #00000022; vertical-align: middle; }
 #switchTable tr:nth-child(even) td { background: var(--row-alt); }
-#switchTable td.name { font-weight: 500; width: 55%; }
+/* Name column fills; value column hugs its dropdown (settings-form look). */
+#switchTable td.name { font-weight: 500; }
+#switchTable td:last-child { width: 1px; white-space: nowrap; }
 #switchTable tr.changed td.name { color: var(--accent); }
 #switchTable td.name .kind { color: var(--muted); font-size: 10px; text-transform: uppercase; margin-left: 8px; }
 #editorEmpty { padding: 16px; }
@@ -144,7 +153,18 @@ select {
 .time-cell select { min-width: 64px; }
 .time-cell .unit { color: var(--muted); font-size: 12px; }
 
-#editorActions { display: flex; gap: 8px; margin-top: 10px; }
+#editorActions { display: flex; gap: 8px; margin-top: 10px; align-items: center; }
+#editorActions .sep { width: 1px; align-self: stretch; background: var(--border); margin: 0 2px; }
+#editorActions .grow { flex: 1; }
+
+#shareBanner {
+  display: flex; align-items: center; gap: 8px;
+  padding: 8px 14px;
+  background: var(--panel-2);
+  border-bottom: 1px solid var(--accent);
+  font-size: 13px;
+}
+#shareBanner .grow { flex: 1; }
 
 .hint { font-size: 11px; color: var(--muted); margin: 8px 0 4px; }
 .log-head { font-size: 12px; color: var(--muted); margin-top: 4px; }
@@ -211,6 +231,12 @@ select {
 .modal a { color: var(--accent-2); }
 .modal .center { text-align: center; }
 .modal select { width: 100%; margin: 8px 0; }
+.modal textarea, .modal input[type=text] {
+  background: var(--panel-2); color: var(--text);
+  border: 1px solid var(--border); border-radius: 6px;
+  padding: 6px 8px; font: 12px/1.4 ui-monospace, Menlo, Consolas, monospace;
+  width: 100%; box-sizing: border-box;
+}
 .modal .recent { list-style: none; margin: 6px 0; padding: 0; max-height: 200px; overflow-y: auto;
   border: 1px solid var(--border); border-radius: 6px; }
 .modal .recent li { padding: 6px 8px; cursor: pointer; border-bottom: 1px solid #00000022; }
